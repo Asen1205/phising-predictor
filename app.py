@@ -96,7 +96,7 @@ def reputation_check_urlhaus(hostname: str):
     try:
         resp = requests.post("https://urlhaus-api.abuse.ch/v1/host/", data={"host": hostname}, timeout=6)
         if resp.status_code == 200 and "query_status" in resp.text.lower():
-            # If the host is known malicious, API returns data; we check presence of 'url_list' or similar
+            
             if "no results" in resp.text.lower():
                 return "Clean"
             return "⚠ Blacklisted"
@@ -357,4 +357,5 @@ else:
 # Small footer
 st.markdown("---")
 st.markdown('<h7 style="text-align:center;">© 第9組. 版權所有</h7>',unsafe_allow_html=True)
+
 
