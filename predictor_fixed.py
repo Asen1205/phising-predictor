@@ -1,50 +1,82 @@
+# phishing_xgb_pipeline.py
 import pandas as pd
+import numpy as np
 import joblib
-from sklearn.ensemble import RandomForestClassifier
+from sklearn.model_selection import train_test_split
+from sklearn.preprocessing import OneHotEncoder
+from sklearn.compose import ColumnTransformer
+from sklearn.pipeline import Pipeline
+from xgboost import XGBClassifier
+from sklearn.metrics import accuracy_score, classification_report
 
-model_content = RandomForestClassifier(
-    n_estimators=100,
-    max_depth=20,
-    random_state=42,
-    n_jobs=-1,
-    warm_start=True  
+# -----------------------------
+# 1. Load dataset
+# -----------------------------
+df = pd.read_csv("Training.csv")  # replace with your CSV path
+
+# Encode target labels
+y = df['status'].map({'legitimate': 0, 'phishing': 1})
+X = df.drop(columns=['url', 'status'], errors='ignore')
+
+# Separate numeric and categorical columns
+numeric_cols = X.select_dtypes(include=np.number).columns.tolist()
+categorical_cols = X.select_dtypes(include='object').columns.tolist()
+
+print(f"Numeric cols: {len(numeric_cols)}, Categorical cols: {len(categorical_cols)}")
+
+# -----------------------------
+# 2. Train/test split
+# -----------------------------
+X_train, X_test, y_train, y_test = train_test_split(
+    X, y, test_size=0.2, random_state=42, stratify=y
 )
 
-model_struct = RandomForestClassifier(
-    n_estimators=100,
-    max_depth=20,
-    random_state=42,
-    n_jobs=-1,
-    warm_start=True
+print(f"Train/test sizes: {X_train.shape} {X_test.shape}")
+
+# -----------------------------
+# 3. Preprocessing pipeline
+# -----------------------------
+preprocessor = ColumnTransformer(
+    transformers=[
+        ("cat", OneHotEncoder(handle_unknown='ignore', sparse_output=True), categorical_cols),
+        ("num", "passthrough", numeric_cols)
+    ],
+    sparse_threshold=1.0  # force sparse output for XGBoost
 )
 
-content_cols = [] 
-struct_cols = []
+# -----------------------------
+# 4. XGBoost classifier pipeline
+# -----------------------------
+pipeline = Pipeline([
+    ("preprocessor", preprocessor),
+    ("classifier", XGBClassifier(
+        tree_method='hist',
+        n_estimators=300,
+        max_depth=6,
+        learning_rate=0.08,
+        subsample=0.8,
+        colsample_bytree=0.8,
+        n_jobs=-1,
+        eval_metric='logloss'
+    ))
+])
 
-chunksize = 10000
-for chunk in pd.read_csv("Training.csv", chunksize=chunksize):
-    y = chunk['status']
-    X = chunk.drop(columns=['url', 'status'])
+# -----------------------------
+# 5. Train the pipeline
+# -----------------------------
+print("Training XGBoost pipeline...")
+pipeline.fit(X_train, y_train)
 
-    X = X.apply(pd.to_numeric, errors='coerce').fillna(0)
+# -----------------------------
+# 6. Evaluate on test set
+# -----------------------------
+y_pred = pipeline.predict(X_test)
+print("✅ Pipeline evaluation on test set")
+print("Accuracy:", accuracy_score(y_test, y_pred))
+print(classification_report(y_test, y_pred))
 
-    if not content_cols:
-        content_cols = [c for c in X.columns if 'url_has' in c or 'url_len' in c or 'path' in c]
-        struct_cols = [c for c in X.columns if c not in content_cols]
-
-    X_content = X[content_cols]
-    X_struct = X[struct_cols]
-
-    model_content.n_estimators += 10
-    model_struct.n_estimators += 10
-
-    model_content.fit(X_content, y)
-    model_struct.fit(X_struct, y)
-
-joblib.dump(model_content, "model_content.pkl")
-joblib.dump(model_struct, "model_structural.pkl")
-joblib.dump(content_cols, "X_content_cols.pkl")
-joblib.dump(struct_cols, "X_struct_cols.pkl")
-
-print("✅ Batch training completed and models saved!")
-
+# -----------------------------
+# 7. Save pipeline
+# -----------------------------
+joblib.dump(pipeline, "xgb_pipeline.pkl")
+print("✅ Pipeline saved as xgb_pipeline.pkl")
