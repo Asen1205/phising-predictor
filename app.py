@@ -1,46 +1,38 @@
 import streamlit as st
 import joblib
+import pandas as pd
 from urllib.parse import urlparse
+from datetime import datetime
 import socket
 import ssl
 import requests
 import base64
 from pathlib import Path
 
-from datetime import datetime
+# -----------------------------
+# 1. Load the trained XGBoost pipeline
+# -----------------------------
+pipeline = joblib.load("xgb_pipeline.pkl")  # your single trained pipeline
 
-try:
-    import whois as whois_lib
-    WHOIS_AVAILABLE = True
-except Exception:
-    WHOIS_AVAILABLE = False
-
-model_content = joblib.load("model_content.pkl")
-model_struct = joblib.load("model_structural.pkl")
-X_content_cols = joblib.load("X_content_cols.pkl")
-X_struct_cols = joblib.load("X_struct_cols.pkl")
-
+# -----------------------------
+# 2. Utility functions
+# -----------------------------
 def domain_exists(domain: str) -> int:
-    """Return 1 if domain resolves to an IP, otherwise 0."""
     if not domain:
         return 0
     try:
         socket.gethostbyname(domain)
         return 1
-    except socket.gaierror:
-        return 0
-    except Exception:
+    except:
         return 0
 
 def dns_a_record(domain: str):
-    """Return resolved IP or None."""
     try:
         return socket.gethostbyname(domain)
-    except Exception:
+    except:
         return None
 
 def ssl_check(hostname: str) -> str:
-    """Quick SSL/TLS check: returns 'Valid SSL' or 'No/Invalid SSL'."""
     if not hostname:
         return "No hostname"
     try:
@@ -49,31 +41,11 @@ def ssl_check(hostname: str) -> str:
             s.settimeout(4)
             s.connect((hostname, 443))
             cert = s.getpeercert()
-
             return "Valid SSL"
-    except Exception:
+    except:
         return "No/Invalid SSL"
 
-def whois_age_days(domain: str):
-    """Return number of days since domain creation or None/Unknown."""
-    if not WHOIS_AVAILABLE or not domain:
-        return None
-    try:
-        w = whois_lib.whois(domain)
-        creation = w.creation_date
-        if creation is None:
-            return None
-        if isinstance(creation, list):
-            creation = creation[0]
-        if creation is None:
-            return None
-        age_days = (datetime.utcnow() - creation).days
-        return max(age_days, 0)
-    except Exception:
-        return None
-
 def geo_country(ip: str):
-    """Return country using ip-api (free, rate-limited) or 'Unknown'."""
     if not ip:
         return "Unknown"
     try:
@@ -82,101 +54,68 @@ def geo_country(ip: str):
             j = resp.json()
             return j.get("country", "Unknown")
         return "Unknown"
-    except Exception:
+    except:
         return "Unknown"
 
 def reputation_check_urlhaus(hostname: str):
-    """
-    Simple reputation check using URLhaus host API.
-    The API requires POST with form data {"host": hostname}
-    Response parsing here is simplistic; treat failures as Unknown.
-    """
     if not hostname:
         return "Unknown"
     try:
         resp = requests.post("https://urlhaus-api.abuse.ch/v1/host/", data={"host": hostname}, timeout=6)
         if resp.status_code == 200 and "query_status" in resp.text.lower():
-            
             if "no results" in resp.text.lower():
                 return "Clean"
             return "⚠ Blacklisted"
         return "Unknown"
-    except Exception:
+    except:
         return "Unknown"
 
-def extract_content_features(url: str):
-    """
-    Build a dictionary of content-like features and then return a list
-    aligned with X_content_cols. Do NOT add features that were NOT in training.
-    """
+# -----------------------------
+# 3. Feature extraction (all expected columns)
+# -----------------------------
+def extract_features(url: str) -> pd.DataFrame:
     parsed = urlparse(url if url.startswith(("http://", "https://")) else "http://" + url)
     hostname = parsed.hostname or ""
     path = parsed.path or ""
-    query = parsed.query or ""
 
-    features = {}
+    features = {
+        "url_len": len(url),
+        "length_hostname": len(hostname),
+        "nb_dots": url.count("."),
+        "nb_hyphens": url.count("-"),
+        "nb_at": url.count("@"),
+        "nb_slash": url.count("/"),
+        "ip": 1 if hostname.replace('.', '').isdigit() else 0,
+        "nb_underscore": url.count("_"),
+        "nb_eq": url.count("="),
+        "nb_percent": url.count("%"),
+        "nb_and": url.count("&"),
+        "nb_or": url.count("|"),
+        "nb_qm": url.count("?"),
+        "nb_star": url.count("*"),
+        "nb_colon": url.count(":"),
+        "nb_dollar": url.count("$"),
+        "nb_comma": url.count(","),
+        "nb_semicolumn": url.count(";"),
+        "nb_space": url.count(" "),
+        "nb_www": 1 if "www." in url.lower() else 0,
+        "length_words_raw": len(url.split("/")),
+        "longest_word_path": max((len(w) for w in path.split("/") if w), default=0),
+        "shortest_word_path": min((len(w) for w in path.split("/") if w), default=0),
+        "longest_word_host": max((len(w) for w in hostname.split(".") if w), default=0),
+        "shortest_word_host": min((len(w) for w in hostname.split(".") if w), default=0),
+    }
 
-    features["url_len"] = len(url)
-    features["url_has_login"] = 1 if "login" in url.lower() else 0
-    features["url_has_client"] = 1 if "client" in url.lower() else 0
-    features["url_has_server"] = 1 if "server" in url.lower() else 0
-    features["url_has_admin"] = 1 if "admin" in url.lower() else 0
-    features["url_has_ip"] = 1 if hostname.replace('.', '').isdigit() else 0
-    features["url_isshorted"] = 1 if any(s in hostname.lower() for s in ("bit.ly", "t.co", "tinyurl", "goo.gl", "ow.ly")) else 0
-    features["url_len"] = len(url)
-    features["url_entropy"] = 0  
-    row = []
+    # Add defaults for remaining pipeline features
+    for col in pipeline.feature_names_in_:
+        if col not in features:
+            features[col] = 0
 
-    for col in X_content_cols:
-        row.append(float(features.get(col, 0)))
-    return row
+    return pd.DataFrame([features])
 
-def extract_structural_features(url: str):
-    """
-    Build a dictionary of structural features and return a list aligned with X_struct_cols.
-    NOTE: do NOT include domain_exists as a model feature unless your model expects it.
-    We will use domain_exists as a separate check outside the model.
-    """
-    parsed = urlparse(url if url.startswith(("http://", "https://")) else "http://" + url)
-    hostname = parsed.hostname or ""
-    path = parsed.path or ""
-    query = parsed.query or ""
-
-    features = {}
-    features["length_url"] = len(url)
-    features["length_hostname"] = len(hostname)
-    features["ip"] = 1 if hostname.replace('.', '').isdigit() else 0
-    features["nb_dots"] = url.count('.')
-    features["nb_hyphens"] = url.count('-')
-    features["nb_at"] = url.count('@')
-    features["nb_qm"] = url.count('?')
-    features["nb_and"] = url.count('&')
-    features["nb_or"] = url.count('|')
-    features["nb_eq"] = url.count('=')
-    features["nb_underscore"] = url.count('_')
-    features["nb_percent"] = url.count('%')
-    features["nb_slash"] = url.count('/')
-
-    row = []
-    for col in X_struct_cols:
-        row.append(float(features.get(col, 0)))
-    return row
-
-def ensemble_predict(url: str):
-    """
-    Predict using both models and average probability.
-    Returns (label, avg_prob, prob_content, prob_struct).
-    """
-    content_vec = extract_content_features(url)
-    struct_vec = extract_structural_features(url)
-
-    prob_content = model_content.predict_proba([content_vec])[0][1] if hasattr(model_content, "predict_proba") else model_content.predict([content_vec])[0]
-    prob_struct = model_struct.predict_proba([struct_vec])[0][1] if hasattr(model_struct, "predict_proba") else model_struct.predict([struct_vec])[0]
-
-    avg_prob = (float(prob_content) + float(prob_struct)) / 2.0
-    label = "Phishing" if avg_prob > 0.5 else "Legitimate"
-    return label, avg_prob, float(prob_content), float(prob_struct)
-
+# -----------------------------
+# 4. Streamlit UI
+# -----------------------------
 st.markdown(
     """
     <style>
@@ -194,59 +133,45 @@ st.markdown('<h2 style="text-align:center;">網路釣魚網址預測器 (Phishin
 st.markdown("<br>", unsafe_allow_html=True)
 st.markdown('<h4 style="text-align:center;">輸入單一網址即可獲得預測結果和多項安全檢查。此過程使用您已訓練的兩個模型（內容模型和結構模型）。</h4>',unsafe_allow_html=True)
 
-url_input = st.text_input("URL", value="")
+url_input = st.text_input("Enter a URL:")
 
-if st.button("Check URL"):
-    if not url_input or not url_input.strip():
-        st.warning("Please enter a URL (e.g. https://example.com).")
-    else:
-        with st.spinner("Analyzing..."):
-            try:
-                parsed = urlparse(url_input if url_input.startswith(("http://", "https://")) else "http://" + url_input)
-                hostname = parsed.hostname or parsed.path.split("/")[0]
+if st.button("Check URL") and url_input.strip():
+    with st.spinner("Analyzing..."):
+        try:
+            parsed = urlparse(url_input if url_input.startswith(("http://", "https://")) else "http://" + url_input)
+            hostname = parsed.hostname or parsed.path.split("/")[0]
 
-                label, avg_prob, p_content, p_struct = ensemble_predict(url_input)
+            # Extract features and predict
+            X = extract_features(url_input)
+            prob = pipeline.predict_proba(X)[0][1]
+            label = "Phishing" if prob > 0.5 else "Legitimate"
 
-                domain_ok = domain_exists(hostname)
-                dns_ip = dns_a_record(hostname)
+            # Additional checks
+            domain_ok = domain_exists(hostname)
+            dns_ip = dns_a_record(hostname)
+            ssl_status = ssl_check(hostname)
+            country = geo_country(dns_ip) if dns_ip else "Unknown"
+            rep = reputation_check_urlhaus(hostname)
 
-                ssl_status = ssl_check(hostname)
-                
-                age_days = whois_age_days(hostname)
-                age_str = f"{age_days} days" if isinstance(age_days, int) else "Unknown"
-                
-                country = geo_country(dns_ip) if dns_ip else "Unknown"
-                
-                rep = reputation_check_urlhaus(hostname)
+            if domain_ok == 0:
+                label = "Phishing (domain does not resolve)"
 
-                if domain_ok == 0:
-                    final_label = "Phishing (domain does not resolve)"
-                else:
-                    final_label = label
+            # Display results
+            if "phish" in label.lower():
+                st.error(f"{label} — score: {prob:.3f}")
+            else:
+                st.success(f"{label} — score: {prob:.3f}")
 
-                st.subheader("🔎 Result")
-                if "phish" in final_label.lower():
-                    st.error(f"{final_label} — score: {avg_prob:.3f} (content: {p_content:.3f}, structural: {p_struct:.3f})")
-                else:
-                    st.success(f"{final_label} — score: {avg_prob:.3f} (content: {p_content:.3f}, structural: {p_struct:.3f})")
+            st.subheader("Additional checks")
+            st.write(f"**Domain:** {hostname}")
+            st.write(f"**DNS A record:** {dns_ip if dns_ip else 'None'}")
+            st.write(f"**Domain exists:** {'Yes' if domain_ok else 'No'}")
+            st.write(f"**SSL:** {ssl_status}")
+            st.write(f"**IP geolocation:** {country}")
+            st.write(f"**Reputation (URLhaus):** {rep}")
 
-                st.subheader("⚠️ Additional checks")
-                st.write(f"**Domain:** {hostname}")
-                st.write(f"**DNS A record:** {dns_ip if dns_ip else 'None / does not resolve'}")
-                st.write(f"**Domain exists:** {'Yes' if domain_ok else 'No'}")
-                st.write(f"**SSL:** {ssl_status}")
-                st.write(f"**WHOIS domain age:** {age_str} {'(whois not installed)' if not WHOIS_AVAILABLE else ''}")
-                st.write(f"**IP geolocation (country):** {country}")
-                st.write(f"**Reputation (URLhaus):** {rep}")
-
-                if st.checkbox("Show extracted feature vectors"):
-                    st.write("Content vector (aligned to X_content_cols):")
-                    st.write(dict(zip(X_content_cols, extract_content_features(url_input))))
-                    st.write("Structural vector (aligned to X_struct_cols):")
-                    st.write(dict(zip(X_struct_cols, extract_structural_features(url_input))))
-
-            except Exception as e:
-                st.exception(f"Error during analysis: {e}")
+        except Exception as e:
+            st.error(f"Error during analysis: {e}")
 
 img_path = Path("phishing.jpg")
 
@@ -351,12 +276,8 @@ else:
         </div>
     </div>
     """
-
     st.markdown(html, unsafe_allow_html=True)
 
 # Small footer
 st.markdown("---")
 st.markdown('<h7 style="text-align:center;">© 第9組. 版權所有</h7>',unsafe_allow_html=True)
-
-
-
