@@ -157,7 +157,7 @@ def extract_structural_features(url: str):
     features["nb_percent"] = url.count('%')
     features["nb_slash"] = url.count('/')
 
-        row = []
+    row = []
     for col in X_struct_cols:
         row.append(float(features.get(col, 0)))
     return row
@@ -357,5 +357,6 @@ else:
 # Small footer
 st.markdown("---")
 st.markdown('<h7 style="text-align:center;">© 第9組. 版權所有</h7>',unsafe_allow_html=True)
+
 
 
