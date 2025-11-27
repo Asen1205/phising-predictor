@@ -9,29 +9,17 @@ from pathlib import Path
 
 from datetime import datetime
 
-# try optional whois import (safe fallback if not installed)
 try:
     import whois as whois_lib
     WHOIS_AVAILABLE = True
 except Exception:
     WHOIS_AVAILABLE = False
 
-# -----------------------------
-# 1. Load your existing trained models & column lists
-# -----------------------------
-# These files must be in the same folder as this script:
-# - model_content.pkl
-# - model_structural.pkl
-# - X_content_cols.pkl
-# - X_struct_cols.pkl
 model_content = joblib.load("model_content.pkl")
 model_struct = joblib.load("model_structural.pkl")
 X_content_cols = joblib.load("X_content_cols.pkl")
 X_struct_cols = joblib.load("X_struct_cols.pkl")
 
-# -----------------------------
-# 2. Utility functions
-# -----------------------------
 def domain_exists(domain: str) -> int:
     """Return 1 if domain resolves to an IP, otherwise 0."""
     if not domain:
@@ -61,7 +49,7 @@ def ssl_check(hostname: str) -> str:
             s.settimeout(4)
             s.connect((hostname, 443))
             cert = s.getpeercert()
-            # Optionally parse cert dates:
+
             return "Valid SSL"
     except Exception:
         return "No/Invalid SSL"
@@ -116,9 +104,6 @@ def reputation_check_urlhaus(hostname: str):
     except Exception:
         return "Unknown"
 
-# -----------------------------
-# 3. Feature extraction (match training columns)
-# -----------------------------
 def extract_content_features(url: str):
     """
     Build a dictionary of content-like features and then return a list
@@ -130,7 +115,7 @@ def extract_content_features(url: str):
     query = parsed.query or ""
 
     features = {}
-    # Basic content features (examples, add more if needed and present in X_content_cols)
+
     features["url_len"] = len(url)
     features["url_has_login"] = 1 if "login" in url.lower() else 0
     features["url_has_client"] = 1 if "client" in url.lower() else 0
@@ -139,11 +124,9 @@ def extract_content_features(url: str):
     features["url_has_ip"] = 1 if hostname.replace('.', '').isdigit() else 0
     features["url_isshorted"] = 1 if any(s in hostname.lower() for s in ("bit.ly", "t.co", "tinyurl", "goo.gl", "ow.ly")) else 0
     features["url_len"] = len(url)
-    features["url_entropy"] = 0  # placeholder; compute if you implemented entropy in training
-    # ... add other content-style features if present in X_content_cols
-
-    # Ensure all expected columns exist; fill with 0 if missing
+    features["url_entropy"] = 0  
     row = []
+
     for col in X_content_cols:
         row.append(float(features.get(col, 0)))
     return row
@@ -173,17 +156,12 @@ def extract_structural_features(url: str):
     features["nb_underscore"] = url.count('_')
     features["nb_percent"] = url.count('%')
     features["nb_slash"] = url.count('/')
-    # ... add other structural features if present in X_struct_cols
 
-    # Ensure all expected columns exist; fill with 0 if missing
-    row = []
+        row = []
     for col in X_struct_cols:
         row.append(float(features.get(col, 0)))
     return row
 
-# -----------------------------
-# 4. Ensemble prediction
-# -----------------------------
 def ensemble_predict(url: str):
     """
     Predict using both models and average probability.
@@ -192,7 +170,6 @@ def ensemble_predict(url: str):
     content_vec = extract_content_features(url)
     struct_vec = extract_structural_features(url)
 
-    # predict_proba may fail if models expect different shapes; assume saved columns match
     prob_content = model_content.predict_proba([content_vec])[0][1] if hasattr(model_content, "predict_proba") else model_content.predict([content_vec])[0]
     prob_struct = model_struct.predict_proba([struct_vec])[0][1] if hasattr(model_struct, "predict_proba") else model_struct.predict([struct_vec])[0]
 
@@ -200,9 +177,6 @@ def ensemble_predict(url: str):
     label = "Phishing" if avg_prob > 0.5 else "Legitimate"
     return label, avg_prob, float(prob_content), float(prob_struct)
 
-# -----------------------------
-# 5. Streamlit UI
-# -----------------------------
 st.markdown(
     """
     <style>
@@ -231,33 +205,25 @@ if st.button("Check URL"):
                 parsed = urlparse(url_input if url_input.startswith(("http://", "https://")) else "http://" + url_input)
                 hostname = parsed.hostname or parsed.path.split("/")[0]
 
-                # 1) ML ensemble prediction
                 label, avg_prob, p_content, p_struct = ensemble_predict(url_input)
 
-                # 2) Domain existence check (separate logic)
                 domain_ok = domain_exists(hostname)
                 dns_ip = dns_a_record(hostname)
 
-                # 3) SSL check
                 ssl_status = ssl_check(hostname)
-
-                # 4) WHOIS age (if available)
+                
                 age_days = whois_age_days(hostname)
                 age_str = f"{age_days} days" if isinstance(age_days, int) else "Unknown"
-
-                # 5) Geo
+                
                 country = geo_country(dns_ip) if dns_ip else "Unknown"
-
-                # 6) Reputation
+                
                 rep = reputation_check_urlhaus(hostname)
 
-                # Combine ML + heuristic: if domain doesn't exist, mark suspicious regardless of ML
                 if domain_ok == 0:
                     final_label = "Phishing (domain does not resolve)"
                 else:
                     final_label = label
 
-                # Display results
                 st.subheader("🔎 Result")
                 if "phish" in final_label.lower():
                     st.error(f"{final_label} — score: {avg_prob:.3f} (content: {p_content:.3f}, structural: {p_struct:.3f})")
@@ -273,7 +239,6 @@ if st.button("Check URL"):
                 st.write(f"**IP geolocation (country):** {country}")
                 st.write(f"**Reputation (URLhaus):** {rep}")
 
-                # Optional: Show extracted features if user wants
                 if st.checkbox("Show extracted feature vectors"):
                     st.write("Content vector (aligned to X_content_cols):")
                     st.write(dict(zip(X_content_cols, extract_content_features(url_input))))
@@ -283,7 +248,6 @@ if st.button("Check URL"):
             except Exception as e:
                 st.exception(f"Error during analysis: {e}")
 
-#Box 1
 img_path = Path("phishing.jpg")
 
 if not img_path.exists():
@@ -393,3 +357,4 @@ else:
 # Small footer
 st.markdown("---")
 st.markdown('<h7 style="text-align:center;">© 第9組. 版權所有</h7>',unsafe_allow_html=True)
+
