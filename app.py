@@ -157,7 +157,7 @@ if st.button("Check URL") and url_input.strip():
                 label = "釣魚網站(網域無法解析)"
 
             # Display results
-            if "phish" in label.lower():
+            if "釣魚" in label.lower():
                 st.error(f"{label}")
             else:
                 st.success(f"{label}")
@@ -281,4 +281,5 @@ else:
 # Small footer
 st.markdown("---")
 st.markdown('<h7 style="text-align:center;">© 第9組. 版權所有</h7>',unsafe_allow_html=True)
+
 
