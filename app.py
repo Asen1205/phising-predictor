@@ -120,7 +120,7 @@ st.markdown(
     """
     <style>
     [data-testid="stAppViewContainer"] {
-        background-image: linear-gradient(180deg, #000000, #4b0082, #f1c232);
+        background-image: linear-gradient(180deg, #000000, #2779F5);
     }
     </style>
     """,
@@ -144,7 +144,7 @@ if st.button("Check URL") and url_input.strip():
             # Extract features and predict
             X = extract_features(url_input)
             prob = pipeline.predict_proba(X)[0][1]
-            label = "Phishing" if prob > 0.5 else "Legitimate"
+            label = "釣魚網站" if prob > 0.5 else "正常網站"
 
             # Additional checks
             domain_ok = domain_exists(hostname)
@@ -158,9 +158,9 @@ if st.button("Check URL") and url_input.strip():
 
             # Display results
             if "phish" in label.lower():
-                st.error(f"{label} — score: {prob:.3f}")
+                st.error(f"{label}")
             else:
-                st.success(f"{label} — score: {prob:.3f}")
+                st.success(f"{label}")
 
             st.subheader("Additional checks")
             st.write(f"**Domain:** {hostname}")
