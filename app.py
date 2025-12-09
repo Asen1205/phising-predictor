@@ -154,7 +154,7 @@ if st.button("Check URL") and url_input.strip():
             rep = reputation_check_urlhaus(hostname)
 
             if domain_ok == 0:
-                label = "Phishing (domain does not resolve)"
+                label = "釣魚網站(網域無法解析)"
 
             # Display results
             if "phish" in label.lower():
@@ -281,3 +281,4 @@ else:
 # Small footer
 st.markdown("---")
 st.markdown('<h7 style="text-align:center;">© 第9組. 版權所有</h7>',unsafe_allow_html=True)
+
